@@ -6,34 +6,56 @@ import dash
 from dash import dcc, html, Input, Output
 import plotly.express as px
 
-# Path to OneDrive folder
-data_folder = r"C:\Users\szymc\OneDrive\NycTaxiData"
+# Path to clean data folder
+data_folder = r"C:\Users\Mikolaj Szymczak\Desktop\Schoolwork\NYC Taxis\NYC-TLC\clean yellow taxis 2024"
 
 # Function to get available columns in files
 def get_available_columns():
-    all_files = [os.path.join(data_folder, f) for f in os.listdir(data_folder) if f.startswith("yellow_tripdata_2024") and f.endswith(".parquet")]
+    all_files = [f for f in os.listdir(data_folder) if f.startswith("cleaned_yellow_tripdata_2024") and f.endswith(".parquet")]
     if not all_files:
         raise FileNotFoundError("No Yellow Cab files found in the dataset folder.")
-    sample_file = all_files[0]  # Read one file to check column names
+    
+    sample_file = os.path.join(data_folder, all_files[0])  # Use full file path
     df_sample = pd.read_parquet(sample_file)
     return df_sample.columns
 
+
 # Function to preprocess data (handling inconsistent columns)
 def preprocess_data():
+    # Expected columns
     expected_columns = ["tpep_pickup_datetime", "PULocationID", "fare_amount"]
 
     # Detect available columns in the dataset
     available_columns = get_available_columns()
+    
+    # Filter only available columns
+    selected_columns = [col for col in expected_columns if col in available_columns]
 
-    # Check if required columns exist
+    # Ensure required columns are present
     missing_columns = [col for col in expected_columns if col not in available_columns]
     if missing_columns:
-        raise KeyError(f"Missing columns in Yellow Cab files: {missing_columns}")
+        raise KeyError(f"Missing required columns: {missing_columns}. Found: {available_columns}")
 
     # Load only Yellow Cab data files
-    df = dd.read_parquet(os.path.join(data_folder, "yellow_tripdata_2024-*.parquet"), 
-                         columns=expected_columns, 
-                         engine="pyarrow")
+    df = dd.read_parquet(
+        os.path.join(data_folder, "cleaned_yellow_tripdata_2024-*.parquet"),  # Ensure correct file pattern
+        columns=selected_columns,
+        engine="pyarrow"
+    )
+
+    # Convert datetime column if it exists
+    if "tpep_pickup_datetime" in df.columns:
+        df["tpep_pickup_datetime"] = dd.to_datetime(df["tpep_pickup_datetime"])
+
+        # Extract hour for analysis
+        df["hour"] = df["tpep_pickup_datetime"].dt.hour
+
+    # Group and aggregate fare amounts by hour and location
+    df_grouped = df.groupby(["PULocationID", "hour"])[["fare_amount"]].mean().compute().reset_index()
+
+    # Save precomputed results
+    df_grouped.to_parquet("precomputed_fares.parquet")
+
 
     # Convert datetime column
     df["tpep_pickup_datetime"] = dd.to_datetime(df["tpep_pickup_datetime"])
