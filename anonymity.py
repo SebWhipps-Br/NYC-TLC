@@ -1,110 +1,126 @@
-from data_loader import get_from_url
+from data_loader import get_from_url, get_from_file
+
 import pandas as pd
+import numpy as np
+import os
+import pyarrow.parquet as pq
 
 from pycanon.anonymity import k_anonymity # https://github.com/IFCA-Advanced-Computing/pycanon
 from anjana.anonymity import k_anonymity as k_anonymiser # https://github.com/IFCA-Advanced-Computing/anjana
 from anjana.anonymity.utils import generate_intervals
 
 
-def data_cleaner():
-    # gets January 2024 yellow taxi data from the source and removes most columns
-    # depreciate when cleaned data is available
+def time_hierarchy(data, title):
+    """ construct the hierarchy dictionary for time based quasi identifiers """
+    hierarchy = {}
+    hierarchy[0] = np.datetime_as_string(data[title])
+    hierarchy[1] = np.datetime_as_string(data[title], unit='m')
+    hierarchy[2] = np.datetime_as_string(data[title], unit='h')
 
-    # importing data
-    url = 'https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet'
-    _, data = get_from_url(url)
-
-    # removing columns that we probably aren't interested in
-    to_drop = ['VendorID', 'passenger_count', 'RatecodeID', 'store_and_fwd_flag',
-               'payment_type', 'fare_amount', 'extra', 'mta_tax', 'tip_amount',
-               'tolls_amount', 'improvement_surcharge', 'total_amount', 'congestion_surcharge',
-               'Airport_fee', 'tpep_dropoff_datetime', 'trip_distance']
-
-    data = data.drop(to_drop, axis=1).iloc[:100000, :]
-
-    # converting the numpy datetime64 format to pandas datetime64
-    # these lines take a short while to run
-    data['tpep_pickup_datetime'] = pd.to_datetime(data['tpep_pickup_datetime'].to_list())
-    # data['tpep_dropoff_datetime'] = pd.to_datetime(data['tpep_dropoff_datetime'].to_list())
-
-    # list columns included in final set
-    columns = data.columns.to_list()
-
-    # save file so function only has to be run once
-    data.to_csv('jan_small.csv', index=False)
-
-    return columns, data
+    return hierarchy
 
 
-# replace with importing cleaned data when available
-# qi are quasi-identifiers, corresponding to columns
-quasi_identifiers, data = data_cleaner()
+def anonymiser(k_desired, suppression, url=None, file=None):
+    """
 
 
-print('Data cleaned')
-print('Columns:', *quasi_identifiers)
+    Parameters
+    ----------
+    k_desired : int
+        Desired k-anonymity value to target
+    suppression : int (0-100)
+        Maximum % of rows to remove to achieve desired k
+    url : string, optional
+        URL of parquet file to use. Depreciated with clean data available. The default is None.
+    file : string, optional
+        Absolute file path of parquet file to use. Should be cleaned data. The default is None.
 
-# creating hierarquies for k-anonymity computing
-# truncating time stamps to group trip times together
-pu_time_second = list(data['tpep_pickup_datetime'])
-pu_time_minute = list(map(lambda x: x.replace(second=0).strftime('%d/%m/%y %H:%M:%S'), pu_time_second))
-pu_time_hour = list(map(lambda x: x.replace(second=0, minute=0).strftime('%d/%m/%y %H:%M:%S'), pu_time_second))
-pu_time_day = list(map(lambda x: x.replace(second=0, minute=0, hour=0).strftime('%d/%m/%y %H:%M:%S'), pu_time_second))
-pu_time_second = list(data['tpep_pickup_datetime'].map(lambda x: x.strftime('%d/%m/%y %H:%M:%S')).astype('string'))
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+    if url:
+        _, data = get_from_url(url)
+    elif file:
+        _, data = get_from_file(file)
+
+    quasi_identifiers = ['tpep_pickup_datetime', 'tpep_dropoff_datetime',
+                         'PULocationID', 'DOLocationID']
+
+    # truncate data for testing
+    # data = data.iloc[:100000, :]
+
+    print('Data cleaned successfully')
+    print('Columns included:', ', '.join(data.columns.tolist()))
+    print('Quasi identifiers:', ', '.join(quasi_identifiers))
+
+    # generate the hierarchy dictionary based on the quasi identifier columns
+    hierarchy = {}
+    # for qi in ['tpep_pickup_datetime', 'tpep_dropoff_datetime']:
+    #     hierarchy[qi] = time_hierarchy(data, qi)
+    
+    # in testing hierarchies always went to the highest level so manually set them before anonymising
+
+    # k_anonymiser doesn't like the timestamp data type so convert it to a string
+    pickup_data = np.datetime_as_string(np.array(data['tpep_pickup_datetime'], dtype='datetime64[h]'))
+    dropoff_data = np.datetime_as_string(np.array(data['tpep_dropoff_datetime'], dtype='datetime64[h]'))
+    data['tpep_pickup_datetime'] = pickup_data
+    data['tpep_dropoff_datetime'] = dropoff_data
+
+    print(f'Hierarchy constructed. k={k_desired} anonymisation beginning')
+
+    # calculates new k-anonymous dataset and corresponding k for both
+    k_original = k_anonymity(data, quasi_identifiers)
+
+    try:
+        data_anonymised = k_anonymiser(data, [], quasi_identifiers, k_desired, suppression, hierarchy).drop(['index'], axis=1)
+    except AttributeError:
+        print(f'Anonymisation could not be carried out for k={k_desired}. Lower k, increase suppression, or include larger sized groups')
+        return pd.DataFrame()
+
+    # calculate k for new anonymised dataset
+    k_anonymised = k_anonymity(data_anonymised, quasi_identifiers)
+    
+    # turn datetime columns back into the datetime64 format
+    data_anonymised['tpep_pickup_datetime'] = pd.to_datetime(data['tpep_pickup_datetime'], yearfirst=True)
+    data_anonymised['tpep_dropoff_datetime'] = pd.to_datetime(data['tpep_dropoff_datetime'], yearfirst=True)
+
+    print('Data anonymised')
+    print(f'Original k={k_original}, anonymised k={k_anonymised}')
+
+    print(f'Original entries={data.shape[0]}, anonymised entries={data_anonymised.shape[0]}')
+
+    return data_anonymised
+
+
+def main():
+    k = 2
+    suppression = 99
+    load_path = os.path.join(os.path.dirname(__file__), 'clean yellow taxis 2024')
+    save_path = os.path.join(os.path.dirname(__file__), 'clean anon yt')    
+
+    # create list of all files in data directory
+    directory = os.fsencode(load_path)
+        
+    for file in os.listdir(directory):
+        filename = os.fsdecode(file)
+        if filename.endswith(".parquet"):
+            parquet_path = os.path.join(load_path, filename)
+            anon_data = anonymiser(k, suppression, file=parquet_path)
+            anon_data.to_parquet(os.path.join(save_path, filename), index=False)
+            continue
+        else:
+            continue
 
 
 
-# doing the same for dropoff times
-# do_time_second = list(data['tpep_dropoff_datetime'])
-# do_time_minute = list(map(lambda x: x.replace(second=0).strftime('%d/%m/%y %H:%M:%S'), do_time_second))
-# do_time_hour = list(map(lambda x: x.replace(second=0, minute=0).strftime('%d/%m/%y %H:%M:%S'), do_time_second))
-# do_time_day = list(map(lambda x: x.replace(second=0, minute=0, hour=0).strftime('%d/%m/%y %H:%M:%S'), do_time_second))
-# do_time_second = list(data['tpep_dropoff_datetime'].map(lambda x: x.strftime('%d/%m/%y %H:%M:%S')).astype('string'))
+
+if __name__ == '__main__':
+    main()
 
 
-# grouping trip lengths together
-# trip_distance = data['trip_distance']
-# trip_distance_quarter = generate_intervals(trip_distance, 0, 350000, 0.25)
-# trip_distance_half = generate_intervals(trip_distance, 0, 350000, 0.5)
-# trip_distance_one = generate_intervals(trip_distance, 0, 350000, 1)
-
-# hierarchies are what the k_anonymiser uses to group data by to eliminate unique results
-hierarchies = {
-    'tpep_pickup_datetime': {0: pu_time_second,
-                             1: pu_time_minute,
-                             2: pu_time_hour,
-                             3: pu_time_day}
-    }
-
-if set(data['tpep_pickup_datetime'].values).issubset(set(pu_time_second)):
-    print('success')
-
-
-print('Data anonymising beginning')
-
-k_desired = 2 # minimum k to be achieved by anonymiser method
-suppression = 50 # maximum % of records to suppress to achieve desired k (0-100)
-
-# k_anonymiser doesn't like the timestamp data type so convert it to a string
-pickup_data = list(map(lambda x: x.strftime('%d/%m/%y %H:%M:%S'), data['tpep_pickup_datetime']))
-
-data['tpep_pickup_datetime'] = pickup_data
-
-# data['tpep_dropoff_datetime'] = data['tpep_dropoff_datetime'].map(lambda x: x.strftime('%d/%m/%y %H:%M:%S')).astype('string')
-
-print(data.info())
-
-k_original = k_anonymity(data, quasi_identifiers)
-data_anonymised = k_anonymiser(data, [], quasi_identifiers, k_desired, suppression, hierarchies)
-k_anonymised = k_anonymity(data_anonymised, quasi_identifiers)
-
-print(f'Original dataset k: {k_original}')
-print(f'New dataset k: {k_anonymised}')
-
-data_anonymised.to_csv('small_anon.csv', index=False)
-
-print(data.info())
-print(data_anonymised.info())
 
 
 
