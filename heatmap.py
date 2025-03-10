@@ -98,53 +98,64 @@ class TaxiHeatmap:
         ).add_to(m)
         return m
 
-    def create_graph_map(self, taxi_zones, trips_pd):
-        """Create a Folium map with nodes (zones) and edges (trips between zones), nodes above edges."""
+    def create_graph_map(self, taxi_zones, trips_pd, threshold_percentage=1.0):
+        """Create a Folium map with nodes and edges, filtering by trip threshold percentage."""
         m = folium.Map(location=self.nyc_center, zoom_start=11, tiles="cartodbdark_matter")
 
-        # Adds taxi zone boundaries as a light background
+        # Add taxi zone boundaries as a light background
         folium.GeoJson(
             taxi_zones.drop(columns=['centroid']),
             style_function=lambda x: {'fillOpacity': 0.1, 'weight': 1, 'color': 'gray'}
         ).add_to(m)
 
-        # Creates a dictionary mapping LocationID to zone names
-        zone_names = taxi_zones.set_index('LocationID')['zone'].to_dict()
+        # Calculate total trips across all zones
+        total_trips_all = taxi_zones['Total_Trips'].sum()
+        trip_threshold = (threshold_percentage / 100) * total_trips_all
+        print(f"Total trips: {total_trips_all}, Threshold ({threshold_percentage}%): {trip_threshold}")
 
-        # Computes edges (trips between zones) and add them first (underneath nodes)
+        # Filter nodes based on threshold
+        filtered_zones = taxi_zones[taxi_zones['Total_Trips'] >= trip_threshold]
+        valid_zone_ids = set(filtered_zones['LocationID'])
+
+        # Create dictionaries for filtered zones
+        zone_names = filtered_zones.set_index('LocationID')['zone'].to_dict()
+        zone_centroids = filtered_zones.set_index('LocationID')['centroid'].to_dict()
+
+        # Compute and filter edges (only between valid nodes)
         edges = trips_pd.groupby(['PULocationID', 'DOLocationID']).size().reset_index(name='Trip_Count')
-        max_edge_weight = edges['Trip_Count'].max()
-        zone_centroids = taxi_zones.set_index('LocationID')['centroid'].to_dict()
+        edges = edges[(edges['PULocationID'].isin(valid_zone_ids)) &
+                      (edges['DOLocationID'].isin(valid_zone_ids))]
+        max_edge_weight = edges['Trip_Count'].max() if not edges.empty else 1  # Avoid division by zero
 
+        # Add edges first (underneath nodes)
         for _, edge in edges.iterrows():
             start_id = edge['PULocationID']
             end_id = edge['DOLocationID']
-            if start_id in zone_centroids and end_id in zone_centroids:
-                start = [zone_centroids[start_id].y, zone_centroids[start_id].x]
-                end = [zone_centroids[end_id].y, zone_centroids[end_id].x]
-                weight = (edge['Trip_Count'] / max_edge_weight) * 10.5 + 0.5  # Scale weight (0.5-10.5 range)
-                start_name = zone_names.get(start_id, f"Zone {start_id}")
-                end_name = zone_names.get(end_id, f"Zone {end_id}")
-                popup_text = f"From {start_name} to {end_name}: {int(edge['Trip_Count'])} trips"
-                folium.PolyLine(
-                    locations=[start, end],
-                    weight=weight,
-                    color='red',
-                    opacity=0.05,
-                    popup=folium.Popup(popup_text, max_width=300)  # Set popup width
-                ).add_to(m)
+            start = [zone_centroids[start_id].y, zone_centroids[start_id].x]
+            end = [zone_centroids[end_id].y, zone_centroids[end_id].x]
+            weight = (edge['Trip_Count'] / max_edge_weight) * 10.5 + 0.5  # Scale weight (0.5-10.5 range)
+            start_name = zone_names.get(start_id, f"Zone {start_id}")
+            end_name = zone_names.get(end_id, f"Zone {end_id}")
+            popup_text = f"From {start_name} to {end_name}: {int(edge['Trip_Count'])} trips"
+            folium.PolyLine(
+                locations=[start, end],
+                weight=weight,
+                color='red',
+                opacity=0.05,
+                popup=folium.Popup(popup_text, max_width=300)
+            ).add_to(m)
 
-        # Adds nodes at centroids after edges (so they appear above)
-        max_trips = taxi_zones['Total_Trips'].max()
-        for _, row in taxi_zones.iterrows():
-            centroid = [row['centroid'].y, row['centroid'].x]  # Latitude, Longitude
+        # Add nodes after edges (above)
+        max_trips = filtered_zones['Total_Trips'].max() if not filtered_zones.empty else 1  # Avoid division by zero
+        for _, row in filtered_zones.iterrows():
+            centroid = [row['centroid'].y, row['centroid'].x]
             size = (row['Total_Trips'] / max_trips) * 10.5 + 0.5  # Scale size (0.5-10.5 range)
             zone_name = row['zone'] if pd.notna(row['zone']) else f"Zone {row['LocationID']}"
             popup_text = f"{zone_name}: {int(row['Total_Trips'])} trips"
             folium.CircleMarker(
                 location=centroid,
                 radius=size,
-                popup=folium.Popup(popup_text, max_width=300),  # Set popup width
+                popup=folium.Popup(popup_text, max_width=300),
                 color='blue',
                 fill=True,
                 fill_color='blue',
@@ -152,7 +163,6 @@ class TaxiHeatmap:
             ).add_to(m)
 
         folium.LayerControl().add_to(m)
-
         return m
 
     def save_map(self, map_obj, suffix="heatmap"):
@@ -170,11 +180,11 @@ class TaxiHeatmap:
         heatmap = self.create_heatmap(taxi_zones)
         self.save_map(heatmap, suffix="heatmap")
 
-    def generate_graph(self):
-        """Generate and save the graph map."""
+    def generate_graph(self, threshold_percentage=1.0):
+        """Generate and save the graph map with a trip threshold percentage."""
         location_counts, trips_pd = self.load_and_process_data()
         taxi_zones = self.load_and_transform_zones(location_counts)
-        graph_map = self.create_graph_map(taxi_zones, trips_pd)
+        graph_map = self.create_graph_map(taxi_zones, trips_pd, threshold_percentage=threshold_percentage)
         self.save_map(graph_map, suffix="graph")
 
 
@@ -182,4 +192,4 @@ if __name__ == "__main__":
     filename = "yellow_tripdata_2024-01.parquet"
     heatmap = TaxiHeatmap(filename)
     # heatmap.generate_heatmap()  # Uncomment to generate heatmap
-    heatmap.generate_graph()    # Generate graph map
+    heatmap.generate_graph(threshold_percentage=1)  # Default 1%, adjust as needed
