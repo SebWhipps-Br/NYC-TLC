@@ -12,7 +12,7 @@ for month in range(1, 13):
     trips_df = trips.to_pandas()
 
     #Delete unwanted columns (can add more)
-    trips_df.drop(['VendorID', 'store_and_fwd_flag', 'improvement_surcharge', 'mta_tax', 'extra', 'congestion_surcharge', 'ehail_fee'], axis=1, inplace=True)
+    trips_df.drop(['VendorID', 'store_and_fwd_flag', 'improvement_surcharge', 'mta_tax', 'extra', 'congestion_surcharge', 'ehail_fee', 'tolls_amount'], axis=1, inplace=True)
     print(trips_df.columns)
 
     #Original rows
@@ -61,8 +61,8 @@ for month in range(1, 13):
     trips_df = IQR_cleaning (trips_df, 'fare_amount')
 
     #tolls_amount: Absolute, IQR
-    trips_df['tolls_amount'] = np.abs(trips_df['tolls_amount'])
-    trips_df = IQR_cleaning (trips_df, 'tolls_amount')
+    #trips_df['tolls_amount'] = np.abs(trips_df['tolls_amount'])
+    #trips_df = IQR_cleaning (trips_df, 'tolls_amount')
 
     #tip_amount cleaning: Absolute, IQR
     trips_df['tip_amount'] = np.abs(trips_df['tip_amount'])
