@@ -20,15 +20,16 @@ for month in range(1, 13):
     print(f"Original rows:{original_rows}")
 
     #Delete duplicate dates and incorrect pickup month/year values
+    trips_df = trips_df.rename(columns={'dropOff_datetime': 'dropoff_datetime'})
     pickup_month = trips_df['pickup_datetime'].dt.month
-    pickup_year = trips_df['dropOff_datetime'].dt.year
+    pickup_year = trips_df['dropoff_datetime'].dt.year
         
     correct_month = (pickup_month == month) & (pickup_year == 2024)
     trips_df = trips_df[correct_month]
     incorrect_months = (~correct_month).sum()
     print(f"Incorrect month/year rows removed: {incorrect_months}")
         
-    duplicate_time = trips_df['pickup_datetime'] != trips_df['dropOff_datetime']
+    duplicate_time = trips_df['pickup_datetime'] != trips_df['dropoff_datetime']
     trips_df = trips_df[duplicate_time]
     time_rows_removed = (~duplicate_time).sum()
     print(f"Duplicate time rows removed:{time_rows_removed}")
@@ -47,8 +48,10 @@ for month in range(1, 13):
         return cleaned
 
    #PUlocationID
-   
+    trips_df = trips_df.rename(columns={'PUlocationID': 'PULocationID'})
+
    #DOlocationID
+    trips_df = trips_df.rename(columns={'DOlocationID': 'DOLocationID'})
 
    #SR_Flag: 1 if shared, null if not
 
