@@ -11,7 +11,7 @@ from data_loader import get_from_file
 class TopRoutesVisualizer:
     """A class to visualize and list the top N most popular taxi routes in NYC with combined bidirectional edges."""
 
-    def __init__(self, parquet_file, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="heatmaps"):
+    def __init__(self, parquet_file, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="output"):
         """
         Initialize the TopRoutesVisualizer with file paths and settings.
 
@@ -221,6 +221,6 @@ class TopRoutesVisualizer:
 
 
 if __name__ == "__main__":
-    filename = "yellow_tripdata_2024-01.parquet"
+    filename = "../yellow_tripdata_2024-01.parquet"
     visualizer = TopRoutesVisualizer(filename)
     visualizer.generate(num_routes=50)  # Default to 10, change as needed

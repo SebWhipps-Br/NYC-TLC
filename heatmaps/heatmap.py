@@ -10,7 +10,7 @@ from data_loader import get_from_file
 class TaxiHeatmap:
     """A class to create taxi trip visualizations (heatmap or graph) for NYC based on TLC data."""
 
-    def __init__(self, parquet_file, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="heatmaps"):
+    def __init__(self, parquet_file, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="output"):
         """
         Initialize the TaxiHeatmap with file paths and settings.
 
@@ -189,7 +189,7 @@ class TaxiHeatmap:
 
 
 if __name__ == "__main__":
-    filename = "yellow_tripdata_2024-01.parquet"
+    filename = "../yellow_tripdata_2024-01.parquet"
     heatmap = TaxiHeatmap(filename)
     # heatmap.generate_heatmap()  # Uncomment to generate heatmap
     heatmap.generate_graph(threshold_percentage=1)  # Default 1%, adjust as needed
