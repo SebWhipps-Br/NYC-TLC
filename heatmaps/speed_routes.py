@@ -310,6 +310,6 @@ if __name__ == "__main__":
     filename = "../clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
     visualizer = SpeedRoutesVisualizer(filename)
     # Generate speed-based map (default)
-    #visualizer.generate(num_routes=100, metric="speed")
+    visualizer.generate(num_routes=100, metric="speed")
     # Generate time-based map
     visualizer.generate(num_routes=100, metric="time")
