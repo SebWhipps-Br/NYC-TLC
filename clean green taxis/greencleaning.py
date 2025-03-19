@@ -48,29 +48,32 @@ for month in range(1, 13):
         print(f"{column} rows removed: {removed}")
         return cleaned
 
+
+    #airport trips exempt from iqr filtering
+    def airports_exempt_cleaning(df, column):
+        airport_mask = ((trips_df['PULocationID'] == 132) | (trips_df['DOLocationID'] == 132) | (trips_df['PULocationID'] == 138) | (trips_df['DOLocationID'] == 138))
+        normal_trips = trips_df[~airport_mask]
+        airport_trips = trips_df[airport_mask]
+        cleaned_normal_trips = IQR_cleaning(normal_trips, column)
+        return pd.concat([cleaned_normal_trips, airport_trips])
+
     #trip_distance cleaning: Absolute, >0.1, IQR
     trips_df['trip_distance'] = np.abs(trips_df['trip_distance'])
     trip_filter = (trips_df['trip_distance'] >= 0.1)
-    trips_df = trips_df[trip_filter]
-    trips_df = IQR_cleaning (trips_df, 'trip_distance')
+    trips_df = airports_exempt_cleaning(trips_df, 'trip_distance')
 
     #fare_amount cleaning: Remove values < $3.00, then Iqr
     trips_df['fare_amount'] = np.abs(trips_df['fare_amount'])
     fare_filtered = (trips_df['fare_amount'] >= 3.00)
-    trips_df = trips_df[fare_filtered]
-    trips_df = IQR_cleaning (trips_df, 'fare_amount')
-
-    #tolls_amount: Absolute, IQR
-    #trips_df['tolls_amount'] = np.abs(trips_df['tolls_amount'])
-    #trips_df = IQR_cleaning (trips_df, 'tolls_amount')
+    trips_df = airports_exempt_cleaning(trips_df, 'fare_amount')
 
     #tip_amount cleaning: Absolute, IQR
     trips_df['tip_amount'] = np.abs(trips_df['tip_amount'])
-    trips_df = IQR_cleaning (trips_df, 'tip_amount')
-
+    trips_df = airports_exempt_cleaning(trips_df, 'tip_amount')
+    
     #total abs IQR
     trips_df['total_amount'] = np.abs(trips_df['total_amount'])
-    trips_df = IQR_cleaning (trips_df, 'total_amount')
+    trips_df = airports_exempt_cleaning(trips_df,'total_amount')
 
     #Not related to location/time/cost but may be interesting 
     #passenger_count 0-6
