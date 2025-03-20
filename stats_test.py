@@ -5,7 +5,7 @@ import numpy as np
 from scipy.stats import shapiro, mannwhitneyu, kruskal, spearmanr
 from statsmodels.stats.multitest import multipletests
 
-from data_loader import get_all_months
+from data_loader import get_all_months, get_from_file
 
 
 class JourneyTimeStats:
@@ -23,13 +23,13 @@ class JourneyTimeStats:
         self.sample_size = sample_size
         # Ensure necessary temporal columns are present
         if 'duration_hours' not in self.trips_df.columns:
-            self.trips_df['pickup_time'] = pd.to_datetime(self.trips_df['tpep_pickup_datetime'])
-            self.trips_df['dropoff_time'] = pd.to_datetime(self.trips_df['tpep_dropoff_datetime'])
+            self.trips_df['pickup_time'] = pd.to_datetime(self.trips_df['pickup_datetime'])
+            self.trips_df['dropoff_time'] = pd.to_datetime(self.trips_df['dropoff_datetime'])
             self.trips_df['duration_hours'] = (self.trips_df['dropoff_time'] - self.trips_df['pickup_time']).dt.total_seconds() / 3600
         if 'hour' not in self.trips_df.columns:
-            self.trips_df['hour'] = self.trips_df['tpep_pickup_datetime'].dt.hour
+            self.trips_df['hour'] = self.trips_df['pickup_datetime'].dt.hour
         if 'day_of_week' not in self.trips_df.columns:
-            self.trips_df['day_of_week'] = self.trips_df['tpep_pickup_datetime'].dt.dayofweek
+            self.trips_df['day_of_week'] = self.trips_df['pickup_time'].dt.dayofweek
 
     def test_normality(self):
         """Test if journey times are normally distributed using Shapiro-Wilk."""
@@ -137,7 +137,7 @@ class JourneyTimeStats:
         print(f"Number of outliers: {len(outliers)} trips")
         return outliers
 
-    def run_all_tests(self, zone_pair_1=(161, 237), zone_pair_2=(236, 162)):
+    def run_all_tests(self, zone_pair_1=(132, 230), zone_pair_2=(230, 132)):
         """Run all statistical tests with default zone pairs."""
         print("\n=== Running All Statistical Tests ===\n")
         self.test_normality()
@@ -156,7 +156,7 @@ class JourneyTimeStats:
 # Example usage with standalone data loading
 if __name__ == "__main__":
     # Define file paths
-    filename = "../clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
+    filename = "clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
     shapefile_path = "heatmaps/taxi_zones/taxi_zones.shp"
 
     # Load shapefile to get valid zone IDs
@@ -164,18 +164,9 @@ if __name__ == "__main__":
     valid_zone_ids = set(temp_zones['LocationID'])
 
     # Load trip data
-    trips_pd = get_all_months()
+    _, trips_pd = get_from_file(filename)
     # Basic preprocessing
-    trips_pd['pickup_time'] = pd.to_datetime(trips_pd['tpep_pickup_datetime'])
-    trips_pd['dropoff_time'] = pd.to_datetime(trips_pd['tpep_dropoff_datetime'])
-    trips_pd['duration_hours'] = (trips_pd['dropoff_time'] - trips_pd['pickup_time']).dt.total_seconds() / 3600
-    trips_pd = trips_pd[
-        (trips_pd['duration_hours'] > 0) &
-        (trips_pd['duration_hours'] < 24) &
-        (trips_pd['PULocationID'].isin(valid_zone_ids)) &
-        (trips_pd['DOLocationID'].isin(valid_zone_ids))
-    ]
 
     # Initialize and run tests
     stats = JourneyTimeStats(trips_pd, sample_size=5000)
-    stats.run_all_tests(zone_pair_1=(161, 237), zone_pair_2=(236, 162))  # Midtown -> Upper East Side vs reverse
+    stats.run_all_tests(zone_pair_1=(132, 230), zone_pair_2=(230, 132))  # JFK -> Times Sq. vs reverse

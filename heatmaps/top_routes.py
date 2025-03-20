@@ -221,6 +221,6 @@ class TopRoutesVisualizer:
 
 
 if __name__ == "__main__":
-    filename = "../yellow_tripdata_2024-01.parquet"
+    filename = "../clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
     visualizer = TopRoutesVisualizer(filename)
     visualizer.generate(num_routes=50)  # Default to 10, change as needed
