@@ -1,10 +1,12 @@
 import os
-import pandas as pd
-import geopandas as gpd
+
 import folium
+import geopandas as gpd
 import numpy as np
-from shapely.geometry import shape, mapping
+import pandas as pd
 from pyproj import Transformer
+from shapely.geometry import shape, mapping
+
 from data_loader import get_year_samples  # Import the sampling function
 
 
@@ -91,9 +93,10 @@ class SpeedRoutesVisualizer:
         return shape(geojson)
 
     def get_top_routes(self, trips_pd, taxi_zones, num_routes=10, metric="speed"):
-        """Identify and print the top N routes with speed or journey time."""
+        """Identify and print the top N routes with speed, journey time, or frequency."""
         directional_counts = trips_pd.groupby(['PULocationID', 'DOLocationID']).size().to_dict()
-        directional_durations = trips_pd.groupby(['PULocationID', 'DOLocationID'])['duration_hours'].mean().to_dict()
+        directional_durations = trips_pd.groupby(['PULocationID', 'DOLocationID'])[
+            'duration_hours'].mean().to_dict()
         edges = pd.DataFrame([
             {'PULocationID': pu, 'DOLocationID': do, 'Forward_Count': count,
              'Forward_Duration': directional_durations.get((pu, do), 0)}
@@ -103,7 +106,8 @@ class SpeedRoutesVisualizer:
             lambda row: directional_counts.get((row['DOLocationID'], row['PULocationID']), 0), axis=1)
         edges['Reverse_Duration'] = edges.apply(
             lambda row: directional_durations.get((row['DOLocationID'], row['PULocationID']), 0), axis=1)
-        edges['Pair_Key'] = edges.apply(lambda row: tuple(sorted([row['PULocationID'], row['DOLocationID']])), axis=1)
+        edges['Pair_Key'] = edges.apply(lambda row: tuple(sorted([row['PULocationID'], row['DOLocationID']])),
+                                        axis=1)
         route_counts = edges.groupby('Pair_Key').agg({
             'Forward_Count': 'sum',
             'Reverse_Count': 'sum',
@@ -114,10 +118,12 @@ class SpeedRoutesVisualizer:
         }).reset_index()
         route_counts['Total_Trips'] = route_counts['Forward_Count'] + route_counts['Reverse_Count']
         route_counts['Dominant_PU'] = route_counts.apply(
-            lambda row: row['PULocationID'] if row['Forward_Count'] >= row['Reverse_Count'] else row['DOLocationID'],
+            lambda row: row['PULocationID'] if row['Forward_Count'] >= row['Reverse_Count'] else row[
+                'DOLocationID'],
             axis=1)
         route_counts['Dominant_DO'] = route_counts.apply(
-            lambda row: row['DOLocationID'] if row['Forward_Count'] >= row['Reverse_Count'] else row['PULocationID'],
+            lambda row: row['DOLocationID'] if row['Forward_Count'] >= row['Reverse_Count'] else row[
+                'PULocationID'],
             axis=1)
         route_counts['Dominant_Count'] = route_counts[['Forward_Count', 'Reverse_Count']].max(axis=1)
         route_counts['Reverse_Count'] = route_counts[['Forward_Count', 'Reverse_Count']].min(axis=1)
@@ -129,6 +135,7 @@ class SpeedRoutesVisualizer:
             lambda row: zone_centroids_proj[row['Dominant_PU']].distance(zone_centroids_proj[row['Dominant_DO']]),
             axis=1)
         route_counts['Distance_Miles'] = route_counts['Distance_Feet'] / 5280
+
         if metric == "speed":
             route_counts['Metric_Value'] = route_counts['Distance_Miles'] / route_counts['Dominant_Duration']
             route_counts['Metric_Value'] = route_counts['Metric_Value'].replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -138,8 +145,13 @@ class SpeedRoutesVisualizer:
             route_counts['Metric_Value'] = route_counts['Dominant_Duration']
             metric_label = "Journey Time"
             metric_unit = "hours"
+        elif metric == "frequency":
+            route_counts['Metric_Value'] = route_counts['Total_Trips']
+            metric_label = "Trip Frequency"
+            metric_unit = "trips"
         else:
-            raise ValueError("Metric must be 'speed' or 'time'")
+            raise ValueError("Metric must be 'speed', 'time', or 'frequency'")
+
         top_routes = route_counts.nlargest(num_routes, 'Total_Trips')
         top_routes = top_routes[
             ['Dominant_PU', 'Dominant_DO', 'Total_Trips', 'Forward_Count', 'Reverse_Count', 'Metric_Value']]
@@ -156,14 +168,14 @@ class SpeedRoutesVisualizer:
             total_trips = int(row['Total_Trips'])
             forward_trips = int(row['Forward_Count'])
             reverse_trips = int(row['Reverse_Count'])
-            metric_value = round(row['Metric_Value'], 2)
+            metric_value = round(row['Metric_Value'], 2) if metric != "frequency" else int(row['Metric_Value'])
             print(f"{i + 1}. {start_name} <-> {end_name}: {total_trips} total trips "
                   f"({forward_trips} from {start_name} to {end_name}, {reverse_trips} reverse), "
                   f"{metric_label}: {metric_value} {metric_unit}")
         return top_routes, metric
 
     def create_routes_map(self, taxi_zones, top_routes, metric="speed"):
-        """Create a Folium map with edges colored by the chosen metric (speed or time)."""
+        """Create a Folium map with edges colored by the chosen metric (speed, time, or frequency)."""
         m = folium.Map(location=self.nyc_center, zoom_start=11, tiles="cartodbdark_matter")
         folium.GeoJson(
             taxi_zones.drop(columns=['centroid', 'centroid_proj']),
@@ -173,20 +185,28 @@ class SpeedRoutesVisualizer:
         top_zones = taxi_zones[taxi_zones['LocationID'].isin(top_zone_ids)]
         zone_centroids = top_zones.set_index('LocationID')['centroid'].to_dict()
         zone_names = top_zones.set_index('LocationID')['zone'].to_dict()
-        max_value = top_routes['Metric_Value'].max()
-        min_value = top_routes['Metric_Value'].min()
-        value_range = max_value - min_value if max_value > min_value else 1
 
+        # For percentile-based normalization
+        metric_values = top_routes['Metric_Value'].values
         if metric == "speed":
             metric_label = "Speed"
             metric_unit = "mph"
             norm_direction = 1  # Higher speed = better (blue)
+            percentiles = np.percentile(metric_values, [0, 25, 75, 100])
         elif metric == "time":
             metric_label = "Journey Time"
             metric_unit = "hours"
             norm_direction = -1  # Lower time = better (blue)
+            percentiles = np.percentile(metric_values, [0, 25, 75, 100])
+        elif metric == "frequency":
+            metric_label = "Trip Frequency"
+            metric_unit = "trips"
+            norm_direction = 1  # Higher frequency = better (blue)
+            # Use logarithmic percentiles for frequency
+            log_values = np.log1p(metric_values)
+            percentiles = np.percentile(log_values, [0, 25, 75, 100])
         else:
-            raise ValueError("Metric must be 'speed' or 'time'")
+            raise ValueError("Metric must be 'speed', 'time', or 'frequency'")
 
         for _, edge in top_routes.iterrows():
             start_id = edge['PULocationID']
@@ -195,15 +215,40 @@ class SpeedRoutesVisualizer:
                 start = [zone_centroids[start_id].y, zone_centroids[start_id].x]
                 end = [zone_centroids[end_id].y, zone_centroids[end_id].x]
                 metric_value = edge['Metric_Value']
-                # Normalize value between 0 and 1
-                norm = (metric_value - min_value) / value_range if value_range > 0 else 0.5
+
+                # Percentile-based normalization
+                if metric == "frequency":
+                    value = np.log1p(metric_value)
+                else:
+                    value = metric_value
+
+                if value <= percentiles[1]:  # Bottom 25%
+                    norm = 0.25 * (value - percentiles[0]) / (percentiles[1] - percentiles[0]) if percentiles[1] > percentiles[0] else 0.25
+                elif value <= percentiles[2]:  # 25-75%
+                    norm = 0.25 + 0.5 * (value - percentiles[1]) / (percentiles[2] - percentiles[1]) if percentiles[2] > percentiles[1] else 0.5
+                else:  # Top 25%
+                    norm = 0.75 + 0.25 * (value - percentiles[2]) / (percentiles[3] - percentiles[2]) if percentiles[
+                                                                                                             3] > \
+                                                                                                         percentiles[
+                                                                                                             2] else 1.0
+                norm = max(0, min(1, norm))  # Clamp between 0 and 1
+
                 if norm_direction == -1:  # Reverse for time metric
                     norm = 1 - norm
 
-                # Simplified color gradient: red (low) to blue (high)
-                r = int(255 * (1 - norm))  # Red decreases as norm increases
-                g = 0  # No green component
-                b = int(255 * norm)  # Blue increases as norm increases
+                # Enhanced color gradient: red -> yellow -> green -> blue
+                if norm < 0.33:  # Red to Yellow
+                    r = 255
+                    g = int(255 * (norm / 0.33))
+                    b = 0
+                elif norm < 0.66:  # Yellow to Green
+                    r = int(255 * (1 - (norm - 0.33) / 0.33))
+                    g = 255
+                    b = 0
+                else:  # Green to Blue
+                    r = 0
+                    g = int(255 * (1 - (norm - 0.66) / 0.33))
+                    b = int(255 * ((norm - 0.66) / 0.33))
                 color = f'rgb({r}, {g}, {b})'
 
                 weight = 3
@@ -211,12 +256,12 @@ class SpeedRoutesVisualizer:
                 end_name = zone_names.get(end_id, f"Zone {end_id}")
                 popup_text = (f"{start_name} <-> {end_name}: {int(edge['Total_Trips'])} total trips "
                               f"({int(edge['Forward_Count'])} to {end_name}, {int(edge['Reverse_Count'])} reverse), "
-                              f"{metric_label}: {round(metric_value, 2)} {metric_unit}")
+                              f"{metric_label}: {round(metric_value, 2) if metric != 'frequency' else int(metric_value)} {metric_unit}")
                 folium.PolyLine(
                     locations=[start, end],
                     color=color,
                     weight=weight,
-                    opacity=1.0,
+                    opacity=0.75,
                     popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
 
@@ -268,3 +313,5 @@ if __name__ == "__main__":
     visualizer.generate(num_routes=100, metric="speed")
     # Generate time-based map
     visualizer.generate(num_routes=100, metric="time")
+    # Generate frequency-based map
+    visualizer.generate(num_routes=100, metric="frequency")
