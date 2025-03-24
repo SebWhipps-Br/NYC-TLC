@@ -33,8 +33,8 @@ class SpeedRoutesVisualizer:
         """Load trip data and compute location counts and durations, filtering by valid zones."""
         _, trips_pd = get_from_file(self.parquet_file)
         # Calculate trip duration in hours
-        trips_pd['pickup_time'] = pd.to_datetime(trips_pd['tpep_pickup_datetime'])
-        trips_pd['dropoff_time'] = pd.to_datetime(trips_pd['tpep_dropoff_datetime'])
+        trips_pd['pickup_time'] = pd.to_datetime(trips_pd['pickup_datetime'])
+        trips_pd['dropoff_time'] = pd.to_datetime(trips_pd['dropoff_datetime'])
         trips_pd['duration_hours'] = (trips_pd['dropoff_time'] - trips_pd['pickup_time']).dt.total_seconds() / 3600
         # Filter out invalid durations and zones not in shapefile
         trips_pd = trips_pd[

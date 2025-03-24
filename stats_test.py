@@ -1,172 +1,187 @@
-import os
 import pandas as pd
-import geopandas as gpd
+import matplotlib.pyplot as plt
+import seaborn as sns
 import numpy as np
-from scipy.stats import shapiro, mannwhitneyu, kruskal, spearmanr
-from statsmodels.stats.multitest import multipletests
+from scipy import stats
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
+import statsmodels.api as sm
+import os
 
-from data_loader import get_all_months, get_from_file
+
+# Reuse your get_year_samples function
+def get_year_samples(year=2024, sample_size=100000, directory="clean yellow taxis 2024"):
+    """
+    Get a sample of taxi trip data for each month of a given year and return a concatenated DataFrame.
+    """
+    year_samples = []
+    for month in range(1, 13):
+        filename = os.path.join(directory, f"cleaned_yellow_tripdata_{year}-{month:02d}.parquet")
+        try:
+            month_df = pd.read_parquet(filename)
+            if len(month_df) > sample_size:
+                sampled_df = month_df.sample(n=sample_size, random_state=42)
+            else:
+                sampled_df = month_df
+            year_samples.append(sampled_df)
+            print(f"Sampled {len(sampled_df)} rows from {filename}")
+        except FileNotFoundError:
+            print(f"Warning: File not found - {filename}. Skipping month {month:02d}.")
+        except Exception as e:
+            print(f"Error processing {filename}: {e}. Skipping month {month:02d}.")
+
+    if year_samples:
+        return pd.concat(year_samples, ignore_index=True)
+    else:
+        print("No data sampled for the year.")
+        return pd.DataFrame()
 
 
-class JourneyTimeStats:
-    """A class to perform statistical tests on journey time in the NYC-TLC dataset."""
+# Preprocessing
+def preprocess_data(df):
+    """Preprocess the data: calculate journey time and extract hour."""
+    df['journey_time'] = (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60  # in minutes
+    df['hour'] = df['pickup_datetime'].dt.hour
+    df = df[df['journey_time'] > 0]  # Filter out invalid journey times
+    return df
 
-    def __init__(self, trips_df, sample_size=5000):
-        """
-        Initialize with a preprocessed TLC trips DataFrame.
 
-        Args:
-            trips_df (pd.DataFrame): DataFrame with columns like 'duration_hours', 'PULocationID', 'DOLocationID', 'tpep_pickup_datetime'.
-            sample_size (int): Number of samples for tests requiring subsampling (default: 5000).
-        """
-        self.trips_df = trips_df.copy()
-        self.sample_size = sample_size
-        # Ensure necessary temporal columns are present
-        if 'duration_hours' not in self.trips_df.columns:
-            self.trips_df['pickup_time'] = pd.to_datetime(self.trips_df['pickup_datetime'])
-            self.trips_df['dropoff_time'] = pd.to_datetime(self.trips_df['dropoff_datetime'])
-            self.trips_df['duration_hours'] = (self.trips_df['dropoff_time'] - self.trips_df['pickup_time']).dt.total_seconds() / 3600
-        if 'hour' not in self.trips_df.columns:
-            self.trips_df['hour'] = self.trips_df['pickup_datetime'].dt.hour
-        if 'day_of_week' not in self.trips_df.columns:
-            self.trips_df['day_of_week'] = self.trips_df['pickup_time'].dt.dayofweek
+# Journey Time by Hour Boxplot without Fliers
+def journey_time_by_hour_boxplot(df):
+    """Statistical analysis of journey time by hour with a box plot (no fliers shown)."""
+    journey_stats = df.groupby('hour')['journey_time'].agg(['mean', 'median', 'std']).reset_index()
+    print("\nJourney Time by Hour - Statistical Summary:")
+    print(journey_stats)
 
-    def test_normality(self):
-        """Test if journey times are normally distributed using Shapiro-Wilk."""
-        journey_times = self.trips_df['duration_hours'].dropna()
-        if len(journey_times) > self.sample_size:
-            journey_times = journey_times.sample(self.sample_size, random_state=42)
-        stat, p_value = shapiro(journey_times)
-        print(f"Shapiro-Wilk Test for Normality:")
-        print(f"Statistic: {stat:.4f}, p-value: {p_value:.4f}")
-        if p_value < 0.05:
-            print("Result: Reject H₀ - Journey times are not normally distributed.")
+    # Box plot with no fliers, using all data
+    plt.figure(figsize=(12, 6))
+    sns.boxplot(data=df, x='hour', y='journey_time', showfliers=False)
+    plt.title('Journey Time Distribution by Hour of Day (No Fliers)')
+    plt.xlabel('Hour of Day')
+    plt.ylabel('Journey Time (minutes)')
+    plt.savefig('journey_time_by_hour_boxplot_no_fliers.png')
+    plt.close()
+
+
+# Enhanced Journey Time Variation with Shapiro-Wilk for All Data and Specific Route
+def journey_time_variation_by_hour(df, pu_location_id=None, do_location_id=None):
+    """Enhanced statistical analysis of journey time with multiple tests and interpretations."""
+    journey_stats = df.groupby('hour')['journey_time'].agg(['mean', 'std']).reset_index()
+    print("\nJourney Time Variation by Hour - Statistical Summary:")
+    print(journey_stats)
+
+    # ANOVA test (parametric)
+    hourly_groups = [group['journey_time'].values for _, group in df.groupby('hour')]
+    f_stat, p_value = stats.f_oneway(*hourly_groups)
+    print(f"\n1. ANOVA Test for Journey Time by Hour: F-statistic = {f_stat:.3f}, p-value = {p_value:.3f}")
+    print(
+        f"   Interpretation: {'Significant' if p_value < 0.05 else 'No significant'} differences in mean journey times across hours. "
+        f"{'Journey time varies by time of day.' if p_value < 0.05 else 'Journey time is consistent across hours.'}")
+
+    # Kruskal-Wallis Test (non-parametric)
+    kw_stat, kw_p_value = stats.kruskal(*hourly_groups)
+    print(f"2. Kruskal-Wallis Test for Journey Time by Hour: H-statistic = {kw_stat:.3f}, p-value = {kw_p_value:.3f}")
+    print(
+        f"   Interpretation: {'Significant' if kw_p_value < 0.05 else 'No significant'} differences in journey time distributions across hours. "
+        f"{'Distributions vary by hour, robust to non-normality.' if kw_p_value < 0.05 else 'Distributions are similar across hours.'}")
+
+    # Mann-Whitney U Test: Compare peak (8 AM) vs. off-peak (3 AM)
+    peak_hour = df[df['hour'] == 8]['journey_time']
+    off_peak_hour = df[df['hour'] == 3]['journey_time']
+    if len(peak_hour) > 0 and len(off_peak_hour) > 0:
+        mw_stat, mw_p_value = stats.mannwhitneyu(peak_hour, off_peak_hour, alternative='two-sided')
+        print(f"3. Mann-Whitney U Test (8 AM vs. 3 AM): U-statistic = {mw_stat:.3f}, p-value = {mw_p_value:.3f}")
+        print(
+            f"   Interpretation: {'Significant' if mw_p_value < 0.05 else 'No significant'} difference between 8 AM and 3 AM journey times. "
+            f"{'Journey times are longer at 8 AM (peak) than 3 AM (off-peak).' if mw_p_value < 0.05 else 'Journey times are similar at 8 AM and 3 AM.'}")
+    else:
+        print("3. Mann-Whitney U Test (8 AM vs. 3 AM): Insufficient data for comparison.")
+
+    # Spearman Correlation with Trip Distance
+    spearman_corr, spearman_p_value = stats.spearmanr(df['journey_time'], df['trip_distance'])
+    print(
+        f"4. Spearman Correlation (Journey Time vs. Trip Distance): rho = {spearman_corr:.3f}, p-value = {spearman_p_value:.3f}")
+    print(
+        f"   Interpretation: {'Strong' if abs(spearman_corr) > 0.7 else 'Moderate' if abs(spearman_corr) > 0.3 else 'Weak'} "
+        f"{'positive' if spearman_corr > 0 else 'negative'} relationship between journey time and trip distance. "
+        f"{'Significant' if spearman_p_value < 0.05 else 'Not significant'} (p < 0.05). "
+        f"{'Longer distances strongly correlate with longer journey times.' if spearman_p_value < 0.05 and abs(spearman_corr) > 0.7 else 'Distance affects journey time to some extent.' if spearman_p_value < 0.05 else 'No clear relationship.'}")
+
+    # Levene's Test for homogeneity of variance
+    levene_stat, levene_p_value = stats.levene(*hourly_groups)
+    print(f"5. Levene’s Test for Variance Homogeneity: Statistic = {levene_stat:.3f}, p-value = {levene_p_value:.3f}")
+    print(
+        f"   Interpretation: {'Significant' if levene_p_value < 0.05 else 'No significant'} differences in variance across hours. "
+        f"{'Variability in journey times differs by hour (caution with ANOVA).' if levene_p_value < 0.05 else 'Variance is consistent across hours.'}")
+
+    # Shapiro-Wilk Test for all journey times
+    print("\n6. Shapiro-Wilk Test for Normality of All Journey Times:")
+    w_stat_all, p_val_all = stats.shapiro(df['journey_time'])
+    print(f"   W-statistic = {w_stat_all:.3f}, p-value = {p_val_all:.3f}")
+    print(f"   Interpretation: p < 0.05 indicates journey times are not normally distributed across all data. "
+          f"{'Likely right-skewed due to long trips.' if p_val_all < 0.05 else 'Data may be approximately normal.'}")
+
+    # Shapiro-Wilk Test for a specific route (if parameters provided)
+    if pu_location_id is not None and do_location_id is not None:
+        route_data = df[(df['PULocationID'] == pu_location_id) & (df['DOLocationID'] == do_location_id)]
+        if len(route_data) > 3:  # Shapiro requires at least 3 samples
+            w_stat_route, p_val_route = stats.shapiro(route_data['journey_time'])
+            print(f"\n7. Shapiro-Wilk Test for Normality of Route (PU: {pu_location_id}, DO: {do_location_id}):")
+            print(f"   Sample size = {len(route_data)} trips")
+            print(f"   W-statistic = {w_stat_route:.3f}, p-value = {p_val_route:.3f}")
+            print(f"   Interpretation: p < 0.05 indicates journey times for this route are not normally distributed. "
+                  f"{'Likely skewed due to variable traffic or trip conditions.' if p_val_route < 0.05 else 'Route times may be approximately normal.'}")
         else:
-            print("Result: Fail to reject H₀ - Journey times may be normally distributed.")
-        return stat, p_value
+            print(
+                f"\n7. Shapiro-Wilk Test for Route (PU: {pu_location_id}, DO: {do_location_id}): Insufficient data (< 4 trips).")
 
-    def compare_zones(self, zone_pair_1, zone_pair_2):
-        """Compare journey times between two zone pairs using Mann-Whitney U Test."""
-        pu1, do1 = zone_pair_1
-        pu2, do2 = zone_pair_2
-        zone1_trips = self.trips_df[
-            (self.trips_df['PULocationID'] == pu1) & (self.trips_df['DOLocationID'] == do1)
-        ]['duration_hours'].dropna()
-        zone2_trips = self.trips_df[
-            (self.trips_df['PULocationID'] == pu2) & (self.trips_df['DOLocationID'] == do2)
-        ]['duration_hours'].dropna()
-        if len(zone1_trips) == 0 or len(zone2_trips) == 0:
-            print(f"Insufficient data for zones {zone_pair_1} or {zone_pair_2}")
-            return None, None
-        stat, p_value = mannwhitneyu(zone1_trips, zone2_trips, alternative='two-sided')
-        print(f"Mann-Whitney U Test: {pu1}->{do1} vs {pu2}->{do2}")
-        print(f"Statistic: {stat:.4f}, p-value: {p_value:.4f}")
-        if p_value < 0.05:
-            print("Result: Reject H₀ - Journey times differ between these zone pairs.")
-        else:
-            print("Result: Fail to reject H₀ - No significant difference in journey times.")
-        return stat, p_value
+    # Tukey's HSD Post-Hoc Test (if ANOVA is significant)
+    if p_value < 0.05:
+        tukey = pairwise_tukeyhsd(endog=df['journey_time'], groups=df['hour'], alpha=0.05)
+        print(f"\n8. Tukey’s HSD Post-Hoc Test (Significant Pairwise Differences):")
+        print(tukey.summary())
+        print("   Interpretation: Shows which hour pairs have significantly different mean journey times. "
+              "Reject H0 (p-adj < 0.05) indicates a real difference between those hours.")
 
-    def test_time_of_day(self):
-        """Test journey time variation by time of day using Kruskal-Wallis Test."""
-        morning = self.trips_df[self.trips_df['hour'].between(6, 10)]['duration_hours'].dropna()
-        afternoon = self.trips_df[self.trips_df['hour'].between(11, 15)]['duration_hours'].dropna()
-        evening = self.trips_df[self.trips_df['hour'].between(16, 20)]['duration_hours'].dropna()
-        if any(len(group) == 0 for group in [morning, afternoon, evening]):
-            print("Insufficient data for one or more time periods.")
-            return None, None
-        stat, p_value = kruskal(morning, afternoon, evening)
-        print(f"Kruskal-Wallis Test for Time of Day (Morning, Afternoon, Evening):")
-        print(f"Statistic: {stat:.4f}, p-value: {p_value:.4f}")
-        if p_value < 0.05:
-            print("Result: Reject H₀ - Journey times differ across times of day.")
-        else:
-            print("Result: Fail to reject H₀ - No significant difference across times of day.")
-        return stat, p_value
+    # Linear Regression: Journey Time vs. Trip Distance by Hour
+    print("\n9. Linear Regression (Journey Time vs. Trip Distance) by Hour:")
+    regression_results = []
+    for hour in range(24):
+        hour_data = df[df['hour'] == hour]
+        if len(hour_data) > 1:  # Need at least 2 points for regression
+            X = sm.add_constant(hour_data['trip_distance'])
+            model = sm.OLS(hour_data['journey_time'], X).fit()
+            slope = model.params['trip_distance']
+            p_value = model.pvalues['trip_distance']
+            r_squared = model.rsquared
+            regression_results.append((hour, slope, p_value, r_squared))
+    for hour, slope, p_val, r2 in regression_results:
+        print(f"   Hour {hour:2d}: Slope = {slope:.3f}, p-value = {p_val:.3f}, R² = {r2:.3f}")
+    print("   Interpretation: Slope indicates minutes per mile; p-value < 0.05 means significant relationship; "
+          "R² shows fit (higher = better). Journey time increases with distance, varying by hour.")
 
-    def correlate_distance_time(self):
-        """Test correlation between journey time and trip distance using Spearman’s Rank."""
-        if 'trip_distance' not in self.trips_df.columns:
-            print("Trip distance not available in dataset.")
-            return None, None
-        journey_times = self.trips_df['duration_hours'].dropna()
-        trip_distances = self.trips_df['trip_distance'].dropna()
-        if len(journey_times) != len(trip_distances):
-            # Align indices if necessary
-            aligned_df = self.trips_df[['duration_hours', 'trip_distance']].dropna()
-            journey_times = aligned_df['duration_hours']
-            trip_distances = aligned_df['trip_distance']
-        correlation, p_value = spearmanr(journey_times, trip_distances)
-        print(f"Spearman’s Rank Correlation (Journey Time vs. Trip Distance):")
-        print(f"Coefficient: {correlation:.4f}, p-value: {p_value:.4f}")
-        if p_value < 0.05:
-            print(f"Result: Reject H₀ - Significant correlation ({'positive' if correlation > 0 else 'negative'}) exists.")
-        else:
-            print("Result: Fail to reject H₀ - No significant correlation.")
-        return correlation, p_value
-
-    def test_day_of_week(self):
-        """Test journey time differences between weekdays and weekends using Mann-Whitney U Test."""
-        weekdays = self.trips_df[self.trips_df['day_of_week'] < 5]['duration_hours'].dropna()  # Mon-Fri
-        weekends = self.trips_df[self.trips_df['day_of_week'] >= 5]['duration_hours'].dropna()  # Sat-Sun
-        if len(weekdays) == 0 or len(weekends) == 0:
-            print("Insufficient data for weekdays or weekends.")
-            return None, None
-        stat, p_value = mannwhitneyu(weekdays, weekends, alternative='two-sided')
-        print(f"Mann-Whitney U Test (Weekdays vs. Weekends):")
-        print(f"Statistic: {stat:.4f}, p-value: {p_value:.4f}")
-        if p_value < 0.05:
-            print("Result: Reject H₀ - Journey times differ between weekdays and weekends.")
-        else:
-            print("Result: Fail to reject H₀ - No significant difference between weekdays and weekends.")
-        return stat, p_value
-
-    def detect_outliers(self):
-        """Detect outliers in journey times using the IQR method."""
-        Q1 = self.trips_df['duration_hours'].quantile(0.25)
-        Q3 = self.trips_df['duration_hours'].quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        outliers = self.trips_df[
-            (self.trips_df['duration_hours'] < lower_bound) | (self.trips_df['duration_hours'] > upper_bound)
-        ]
-        print(f"Outlier Detection (IQR Method):")
-        print(f"Q1: {Q1:.2f}, Q3: {Q3:.2f}, IQR: {IQR:.2f}")
-        print(f"Bounds: [{lower_bound:.2f}, {upper_bound:.2f}] hours")
-        print(f"Number of outliers: {len(outliers)} trips")
-        return outliers
-
-    def run_all_tests(self, zone_pair_1=(132, 230), zone_pair_2=(230, 132)):
-        """Run all statistical tests with default zone pairs."""
-        print("\n=== Running All Statistical Tests ===\n")
-        self.test_normality()
-        print("\n")
-        self.compare_zones(zone_pair_1, zone_pair_2)
-        print("\n")
-        self.test_time_of_day()
-        print("\n")
-        self.correlate_distance_time()
-        print("\n")
-        self.test_day_of_week()
-        print("\n")
-        self.detect_outliers()
+    # Bar plot with confidence intervals
+    plt.figure(figsize=(12, 6))
+    sns.barplot(data=journey_stats, x='hour', y='mean', errorbar=('ci', 95), color='skyblue')
+    plt.title('Average Journey Time by Hour of Day with 95% Confidence Intervals')
+    plt.xlabel('Hour of Day')
+    plt.ylabel('Average Journey Time (minutes)')
+    plt.savefig('journey_time_by_hour_bar.png')
+    plt.close()
 
 
-# Example usage with standalone data loading
+# Main execution
 if __name__ == "__main__":
-    # Define file paths
-    filename = "clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
-    shapefile_path = "heatmaps/taxi_zones/taxi_zones.shp"
+    # Load the sampled data
+    year_data = get_year_samples(year=2024, sample_size=100000)
 
-    # Load shapefile to get valid zone IDs
-    temp_zones = gpd.read_file(shapefile_path)
-    valid_zone_ids = set(temp_zones['LocationID'])
+    if not year_data.empty:
+        # Preprocess the data
+        year_data = preprocess_data(year_data)
 
-    # Load trip data
-    _, trips_pd = get_from_file(filename)
-    # Basic preprocessing
+        # Perform analyses (example route: PU=237, DO=236, common Manhattan zones)
+        journey_time_by_hour_boxplot(year_data)
+        journey_time_variation_by_hour(year_data, pu_location_id=237, do_location_id=236)
 
-    # Initialize and run tests
-    stats = JourneyTimeStats(trips_pd, sample_size=5000)
-    stats.run_all_tests(zone_pair_1=(132, 230), zone_pair_2=(230, 132))  # JFK -> Times Sq. vs reverse
+        print("\nAnalysis complete. Check the generated PNG files for new plots.")
+    else:
+        print("No data available for analysis.")

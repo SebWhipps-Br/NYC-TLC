@@ -106,4 +106,5 @@ def get_year_samples(year=2024, sample_size=100000, directory="clean yellow taxi
 if __name__ == "__main__":
     year_data = get_year_samples(year=2024, sample_size=100000, directory="clean yellow taxis 2024")
     print(f"Total rows sampled: {len(year_data)}")
+    print(year_data.columns)
     print(year_data.head())
