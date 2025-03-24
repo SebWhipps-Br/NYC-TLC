@@ -17,7 +17,7 @@ class TaxiHeatmap:
         Args:
             parquet_file (str): Path to the TLC parquet file (e.g., 'yellow_tripdata_2024-01.parquet').
             shapefile_path (str): Path to the taxi zones shapefile (default: 'taxi_zones/taxi_zones.shp').
-            output_dir (str): Directory to save the output HTML file (default: 'heatmaps').
+            output_dir (str): Directory to save the output HTML file (default: 'maps').
         """
         self.parquet_file = parquet_file
         self.shapefile_path = shapefile_path

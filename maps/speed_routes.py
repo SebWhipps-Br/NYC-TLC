@@ -2,26 +2,25 @@ import os
 import pandas as pd
 import geopandas as gpd
 import folium
-from folium.plugins import AntPath
+import numpy as np
 from shapely.geometry import shape, mapping
 from pyproj import Transformer
-import numpy as np
-from data_loader import get_from_file
+from data_loader import get_year_samples  # Import the sampling function
 
 
 class SpeedRoutesVisualizer:
     """A class to visualize top N taxi routes in NYC with edges colored by speed or journey time."""
 
-    def __init__(self, parquet_file, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="output"):
+    def __init__(self, trips_df, shapefile_path="taxi_zones/taxi_zones.shp", output_dir="output"):
         """
-        Initialize the SpeedRoutesVisualizer with file paths and settings.
+        Initialize the SpeedRoutesVisualizer with a DataFrame and settings.
 
         Args:
-            parquet_file (str): Path to the TLC parquet file (e.g., 'yellow_tripdata_2024-01.parquet').
+            trips_df (pd.DataFrame): DataFrame containing TLC trip data (e.g., sampled data).
             shapefile_path (str): Path to the taxi zones shapefile (default: 'taxi_zones/taxi_zones.shp').
-            output_dir (str): Directory to save the output HTML file (default: 'heatmaps').
+            output_dir (str): Directory to save the output HTML file (default: 'output').
         """
-        self.parquet_file = parquet_file
+        self.trips_df = trips_df
         self.shapefile_path = shapefile_path
         self.output_dir = output_dir
         self.transformer = Transformer.from_crs("epsg:2263", "epsg:4326", always_xy=True)
@@ -30,8 +29,8 @@ class SpeedRoutesVisualizer:
         self.nyc_center = [40.7128, -74.0060]  # NYC coordinates (lat, lon)
 
     def load_and_process_data(self, valid_zone_ids):
-        """Load trip data and compute location counts and durations, filtering by valid zones."""
-        _, trips_pd = get_from_file(self.parquet_file)
+        """Process the provided trip data and compute location counts and durations."""
+        trips_pd = self.trips_df.copy()  # Use the provided DataFrame
         # Calculate trip duration in hours
         trips_pd['pickup_time'] = pd.to_datetime(trips_pd['pickup_datetime'])
         trips_pd['dropoff_time'] = pd.to_datetime(trips_pd['dropoff_datetime'])
@@ -67,15 +66,11 @@ class SpeedRoutesVisualizer:
         taxi_zones['Total_Trips'] = taxi_zones['Total_Trips'].fillna(0)
         print("Original CRS:", taxi_zones.crs)
         print("Any geometries with Z:", taxi_zones.geometry.has_z.any())
-
-        # Compute centroids in the original projected CRS (EPSG:2263) for distance
         taxi_zones['centroid_proj'] = taxi_zones.geometry.centroid
-        # Transform to EPSG:4326 for mapping
         taxi_zones['centroid'] = taxi_zones['centroid_proj'].apply(self._transform_geometry)
         taxi_zones.geometry = taxi_zones.geometry.apply(self._transform_geometry)
         taxi_zones.crs = "epsg:4326"
         print("New CRS:", taxi_zones.crs)
-
         return taxi_zones
 
     def _transform_geometry(self, geom):
@@ -97,27 +92,18 @@ class SpeedRoutesVisualizer:
 
     def get_top_routes(self, trips_pd, taxi_zones, num_routes=10, metric="speed"):
         """Identify and print the top N routes with speed or journey time."""
-        # Compute directional trip counts and average durations
         directional_counts = trips_pd.groupby(['PULocationID', 'DOLocationID']).size().to_dict()
         directional_durations = trips_pd.groupby(['PULocationID', 'DOLocationID'])['duration_hours'].mean().to_dict()
-
-        # Create a DataFrame with all pairs and their counts/durations
         edges = pd.DataFrame([
             {'PULocationID': pu, 'DOLocationID': do, 'Forward_Count': count,
              'Forward_Duration': directional_durations.get((pu, do), 0)}
             for (pu, do), count in directional_counts.items()
         ])
-
-        # Add reverse counts and durations
         edges['Reverse_Count'] = edges.apply(
             lambda row: directional_counts.get((row['DOLocationID'], row['PULocationID']), 0), axis=1)
         edges['Reverse_Duration'] = edges.apply(
             lambda row: directional_durations.get((row['DOLocationID'], row['PULocationID']), 0), axis=1)
-
-        # Create a unique key for each pair (sorted to combine A-B and B-A)
         edges['Pair_Key'] = edges.apply(lambda row: tuple(sorted([row['PULocationID'], row['DOLocationID']])), axis=1)
-
-        # Group by pair to sum total trips
         route_counts = edges.groupby('Pair_Key').agg({
             'Forward_Count': 'sum',
             'Reverse_Count': 'sum',
@@ -126,11 +112,7 @@ class SpeedRoutesVisualizer:
             'Forward_Duration': 'first',
             'Reverse_Duration': 'first'
         }).reset_index()
-
-        # Manually calculate total trips (Forward + Reverse)
         route_counts['Total_Trips'] = route_counts['Forward_Count'] + route_counts['Reverse_Count']
-
-        # Determine dominant direction based on trip count
         route_counts['Dominant_PU'] = route_counts.apply(
             lambda row: row['PULocationID'] if row['Forward_Count'] >= row['Reverse_Count'] else row['DOLocationID'],
             axis=1)
@@ -142,38 +124,28 @@ class SpeedRoutesVisualizer:
         route_counts['Dominant_Duration'] = route_counts.apply(
             lambda row: row['Forward_Duration'] if row['Forward_Count'] >= row['Reverse_Count'] else row[
                 'Reverse_Duration'], axis=1)
-
-        # Calculate distance and metric (speed or time)
         zone_centroids_proj = taxi_zones.set_index('LocationID')['centroid_proj'].to_dict()
         route_counts['Distance_Feet'] = route_counts.apply(
             lambda row: zone_centroids_proj[row['Dominant_PU']].distance(zone_centroids_proj[row['Dominant_DO']]),
             axis=1)
-        route_counts['Distance_Miles'] = route_counts['Distance_Feet'] / 5280  # Convert feet to miles
-
+        route_counts['Distance_Miles'] = route_counts['Distance_Feet'] / 5280
         if metric == "speed":
-            route_counts['Metric_Value'] = route_counts['Distance_Miles'] / route_counts[
-                'Dominant_Duration']  # Speed in mph
+            route_counts['Metric_Value'] = route_counts['Distance_Miles'] / route_counts['Dominant_Duration']
             route_counts['Metric_Value'] = route_counts['Metric_Value'].replace([np.inf, -np.inf], np.nan).fillna(0)
             metric_label = "Speed"
             metric_unit = "mph"
         elif metric == "time":
-            route_counts['Metric_Value'] = route_counts['Dominant_Duration']  # Time in hours
+            route_counts['Metric_Value'] = route_counts['Dominant_Duration']
             metric_label = "Journey Time"
             metric_unit = "hours"
         else:
             raise ValueError("Metric must be 'speed' or 'time'")
-
-        # Get top N routes by total trips
         top_routes = route_counts.nlargest(num_routes, 'Total_Trips')
         top_routes = top_routes[
             ['Dominant_PU', 'Dominant_DO', 'Total_Trips', 'Forward_Count', 'Reverse_Count', 'Metric_Value']]
         top_routes.columns = ['PULocationID', 'DOLocationID', 'Total_Trips', 'Forward_Count', 'Reverse_Count',
                               'Metric_Value']
-
-        # Map LocationID to zone names
         zone_names = taxi_zones.set_index('LocationID')['zone'].to_dict()
-
-        # Print the top N routes with the chosen metric
         print(f"\nTop {num_routes} Most Popular Routes (Bidirectional Combined) with {metric_label}:")
         print("--------------------------------------------------------------------")
         for i, row in top_routes.iterrows():
@@ -188,45 +160,34 @@ class SpeedRoutesVisualizer:
             print(f"{i + 1}. {start_name} <-> {end_name}: {total_trips} total trips "
                   f"({forward_trips} from {start_name} to {end_name}, {reverse_trips} reverse), "
                   f"{metric_label}: {metric_value} {metric_unit}")
-
         return top_routes, metric
 
     def create_routes_map(self, taxi_zones, top_routes, metric="speed"):
         """Create a Folium map with edges colored by the chosen metric (speed or time)."""
         m = folium.Map(location=self.nyc_center, zoom_start=11, tiles="cartodbdark_matter")
-
-        # Add taxi zone boundaries as a light background
         folium.GeoJson(
             taxi_zones.drop(columns=['centroid', 'centroid_proj']),
             style_function=lambda x: {'fillOpacity': 0.1, 'weight': 1, 'color': 'gray'}
         ).add_to(m)
-
-        # Get unique zones involved in top routes
         top_zone_ids = set(top_routes['PULocationID']).union(top_routes['DOLocationID'])
         top_zones = taxi_zones[taxi_zones['LocationID'].isin(top_zone_ids)]
-
-        # Map LocationID to centroids and zone names
         zone_centroids = top_zones.set_index('LocationID')['centroid'].to_dict()
         zone_names = top_zones.set_index('LocationID')['zone'].to_dict()
-
-        # Determine metric range and label
         max_value = top_routes['Metric_Value'].max()
         min_value = top_routes['Metric_Value'].min()
-        value_range = max_value - min_value if max_value > min_value else 1  # Avoid division by zero
+        value_range = max_value - min_value if max_value > min_value else 1
+
         if metric == "speed":
             metric_label = "Speed"
             metric_unit = "mph"
-            # Higher speed = green, lower speed = red
-            norm_direction = 1  # Direct: low to high
+            norm_direction = 1  # Higher speed = better (blue)
         elif metric == "time":
             metric_label = "Journey Time"
             metric_unit = "hours"
-            # Shorter time = green, longer time = red (invert)
-            norm_direction = -1  # Inverse: high to low
+            norm_direction = -1  # Lower time = better (blue)
         else:
             raise ValueError("Metric must be 'speed' or 'time'")
 
-        # Add edges with metric-based coloring
         for _, edge in top_routes.iterrows():
             start_id = edge['PULocationID']
             end_id = edge['DOLocationID']
@@ -234,68 +195,58 @@ class SpeedRoutesVisualizer:
                 start = [zone_centroids[start_id].y, zone_centroids[start_id].x]
                 end = [zone_centroids[end_id].y, zone_centroids[end_id].x]
                 metric_value = edge['Metric_Value']
-                # Normalize value to 0-1 range
+                # Normalize value between 0 and 1
                 norm = (metric_value - min_value) / value_range if value_range > 0 else 0.5
-                if norm_direction == -1:  # Invert for time
+                if norm_direction == -1:  # Reverse for time metric
                     norm = 1 - norm
-                # Interpolate from red (low) to blue (medium) to green (high)
-                if norm < 0.5:
-                    r = 255
-                    g = int(255 * (norm * 2))  # 0 to 255
-                    b = 0
-                else:
-                    r = int(255 * (1 - (norm - 0.5) * 2))  # 255 to 0
-                    g = 255
-                    b = int(255 * ((norm - 0.5) * 2))  # 0 to 255
+
+                # Simplified color gradient: red (low) to blue (high)
+                r = int(255 * (1 - norm))  # Red decreases as norm increases
+                g = 0  # No green component
+                b = int(255 * norm)  # Blue increases as norm increases
                 color = f'rgb({r}, {g}, {b})'
-                weight = 5  # Fixed weight for visibility
+
+                weight = 3
                 start_name = zone_names.get(start_id, f"Zone {start_id}")
                 end_name = zone_names.get(end_id, f"Zone {end_id}")
                 popup_text = (f"{start_name} <-> {end_name}: {int(edge['Total_Trips'])} total trips "
                               f"({int(edge['Forward_Count'])} to {end_name}, {int(edge['Reverse_Count'])} reverse), "
                               f"{metric_label}: {round(metric_value, 2)} {metric_unit}")
-                AntPath(
+                folium.PolyLine(
                     locations=[start, end],
                     color=color,
                     weight=weight,
-                    opacity=0.7,
-                    popup=folium.Popup(popup_text, max_width=300),
-                    dash_array=[10, 20],
-                    delay=1000,
-                    pulse_color='white'
+                    opacity=1.0,
+                    popup=folium.Popup(popup_text, max_width=300)
                 ).add_to(m)
 
-        # Add nodes at centroids (above edges)
         max_trips = top_zones['Total_Trips'].max() if not top_zones.empty else 1
         for _, row in top_zones.iterrows():
             centroid = [row['centroid'].y, row['centroid'].x]
-            size = (row['Total_Trips'] / max_trips) * 10 + 2  # Scale size (2-12 range)
+            size = (row['Total_Trips'] / max_trips) * 10 + 2
             zone_name = row['zone'] if pd.notna(row['zone']) else f"Zone {row['LocationID']}"
             popup_text = f"{zone_name}: {int(row['Total_Trips'])} trips"
             folium.CircleMarker(
                 location=centroid,
                 radius=size,
                 popup=folium.Popup(popup_text, max_width=300),
-                color='blue',
+                color='white',
                 fill=True,
-                fill_color='blue',
+                fill_color='white',
                 fill_opacity=0.75
             ).add_to(m)
-
         folium.LayerControl().add_to(m)
         return m
 
     def save_map(self, map_obj, suffix="speed_routes"):
-        """Save the Folium map to an HTML file based on the parquet filename."""
-        base_name = os.path.splitext(os.path.basename(self.parquet_file))[0]
-        output_filename = os.path.join(self.output_dir, f"{base_name}_{suffix}.html")
+        """Save the Folium map to an HTML file."""
+        output_filename = os.path.join(self.output_dir, f"yellow_tripdata_2024_sampled_{suffix}.html")
         os.makedirs(self.output_dir, exist_ok=True)
         map_obj.save(output_filename)
         print(f"Map saved as: {output_filename}")
 
     def generate(self, num_routes=10, metric="speed"):
         """Generate and save the routes map, printing the list, with chosen metric."""
-        # Load zones first to get valid LocationIDs
         temp_zones = gpd.read_file(self.shapefile_path)
         valid_zone_ids = set(temp_zones['LocationID'])
         trips_pd, location_counts = self.load_and_process_data(valid_zone_ids)
@@ -307,9 +258,13 @@ class SpeedRoutesVisualizer:
 
 
 if __name__ == "__main__":
-    filename = "../clean yellow taxis 2024/cleaned_yellow_tripdata_2024-01.parquet"
-    visualizer = SpeedRoutesVisualizer(filename)
-    # Generate speed-based map (default)
+    # Get sampled data for the year 2024
+    sampled_data = get_year_samples(year=2024, sample_size=100000, directory="../clean yellow taxis 2024")
+    print(f"Total sampled rows: {len(sampled_data)}")
+
+    # Initialize visualizer with sampled data
+    visualizer = SpeedRoutesVisualizer(trips_df=sampled_data)
+    # Generate speed-based map
     visualizer.generate(num_routes=100, metric="speed")
     # Generate time-based map
     visualizer.generate(num_routes=100, metric="time")
