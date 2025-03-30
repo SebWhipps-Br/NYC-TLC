@@ -6,37 +6,9 @@ from scipy import stats
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 import statsmodels.api as sm
 import os
+from data_loader import get_year_samples
 
 
-# Reuse your get_year_samples function
-def get_year_samples(year=2024, sample_size=100000, directory="clean yellow taxis 2024"):
-    """
-    Get a sample of taxi trip data for each month of a given year and return a concatenated DataFrame.
-    """
-    year_samples = []
-    for month in range(1, 13):
-        filename = os.path.join(directory, f"cleaned_yellow_tripdata_{year}-{month:02d}.parquet")
-        try:
-            month_df = pd.read_parquet(filename)
-            if len(month_df) > sample_size:
-                sampled_df = month_df.sample(n=sample_size, random_state=42)
-            else:
-                sampled_df = month_df
-            year_samples.append(sampled_df)
-            print(f"Sampled {len(sampled_df)} rows from {filename}")
-        except FileNotFoundError:
-            print(f"Warning: File not found - {filename}. Skipping month {month:02d}.")
-        except Exception as e:
-            print(f"Error processing {filename}: {e}. Skipping month {month:02d}.")
-
-    if year_samples:
-        return pd.concat(year_samples, ignore_index=True)
-    else:
-        print("No data sampled for the year.")
-        return pd.DataFrame()
-
-
-# Preprocessing
 def preprocess_data(df):
     """Preprocess the data: calculate journey time and extract hour."""
     df['journey_time'] = (df['dropoff_datetime'] - df['pickup_datetime']).dt.total_seconds() / 60  # in minutes
@@ -45,7 +17,6 @@ def preprocess_data(df):
     return df
 
 
-# Journey Time by Hour Boxplot without Fliers
 def journey_time_by_hour_boxplot(df):
     """Statistical analysis of journey time by hour with a box plot (no fliers shown)."""
     journey_stats = df.groupby('hour')['journey_time'].agg(['mean', 'median', 'std']).reset_index()
