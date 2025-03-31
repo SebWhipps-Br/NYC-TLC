@@ -202,12 +202,10 @@ def analyse_yankees_game_impact(
         "route_analysis": route_pivot.reset_index().to_dict(orient='records')
     }
 
-    # Print summary
     print_analysis_summary(results, route_pivot, valid_trips)
     return results
 
 
-# Example usage
 if __name__ == "__main__":
     year_data = sample_all_cab_types_proportionally()
     games_csv_path = "extra data/mlb-2024-yankees.csv"
@@ -216,6 +214,6 @@ if __name__ == "__main__":
         games_csv_path=games_csv_path,
         taxi_zones_path="maps/taxi_zones/taxi_zones.shp",
         stadium_zone=247,
-        window_hours_before=2,
-        window_hours_after=2
+        window_hours_before=1,
+        window_hours_after=1
     )
