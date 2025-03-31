@@ -4,13 +4,13 @@ import geopandas as gpd
 import folium
 from shapely.geometry import shape, mapping
 from pyproj import Transformer
-from data_loader import get_year_samples
+from data_loader import get_year_samples, sample_all_cab_types_proportionally
 
 
 class TaxiHeatmap:
     """A class to create taxi trip visualizations (heatmap or graph) for NYC based on TLC data."""
 
-    def __init__(self, year=2024, sample_size=100000, directory="../clean yellow taxis 2024",
+    def __init__(self, year=2024, sample_size=10000000, directory="../",
                  shapefile_path="taxi_zones/taxi_zones.shp", output_dir="output"):
         self.year = year
         self.sample_size = sample_size
@@ -21,7 +21,7 @@ class TaxiHeatmap:
         self.nyc_center = [40.7128, -74.0060]
 
     def load_and_process_data(self):
-        trips_pd = get_year_samples(year=self.year, sample_size=self.sample_size, directory=self.directory)
+        trips_pd = sample_all_cab_types_proportionally(year=self.year, total_sample_size=self.sample_size, base_dir=self.directory)
         print(f"Total sampled rows: {len(trips_pd)}")
         pickup_counts = self._count_trips(trips_pd, 'PULocationID', 'Pickup_Count')
         dropoff_counts = self._count_trips(trips_pd, 'DOLocationID', 'Dropoff_Count')
@@ -187,7 +187,7 @@ class TaxiHeatmap:
         return m
 
     def save_map(self, map_obj, suffix="heatmap"):
-        output_filename = os.path.join(self.output_dir, f"yellow_tripdata_{self.year}_{suffix}.html")
+        output_filename = os.path.join(self.output_dir, f"tripdata_{self.year}_{suffix}.html")
         os.makedirs(self.output_dir, exist_ok=True)
         map_obj.save(output_filename)
         print(f"Map saved as: {output_filename}")
@@ -210,7 +210,7 @@ class TaxiHeatmap:
 
 
 if __name__ == "__main__":
-    heatmap = TaxiHeatmap(year=2024, sample_size=100000, directory="../clean yellow taxis 2024")
+    heatmap = TaxiHeatmap(year=2024, sample_size=10000000, directory="../")
     # Use original method
     #heatmap.generate_heatmap(palette='viridis', use_updated_method=False)
     # Use updated method

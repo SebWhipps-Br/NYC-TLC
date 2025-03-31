@@ -127,10 +127,10 @@ def sample_all_cab_types_proportionally(year=2024, total_sample_size=5000000, ba
     """
     # Define cab types and their corresponding directories
     cab_types = {
-        "yellow": f"clean yellow taxis {year}",
-        "green": "clean green taxis",
-        "fhv": "clean fhv",
-        "hvfhv": "clean hvfhvs"
+        "yellow": base_dir + f"clean yellow taxis {year}",
+        "green": base_dir + "clean green taxis",
+        "fhv": base_dir + "clean fhv",
+        "hvfhv": base_dir + "clean hvfhvs"
     }
 
     # Initialise dictionaries to store file sizes and samples
